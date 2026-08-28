@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "minusone_re": {
+      "type": "local",
+      "command": ["node", "./dist/mcp/server.js"],
+      "enabled": true,
+      "environment": {
+        "MINUSONE_WORKSPACE": "."
+      }
+    }
+  },
+  "permission": {
+    "minusone_re_*": "allow",
+    "bash": "ask",
+    "edit": "ask",
+    "write": "ask"
+  }
+}

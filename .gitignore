@@ -1,0 +1,37 @@
+node_modules/
+dist/
+.minusone/
+minusone-ghidra-projects/
+*.log
+.env
+.zcode/
+*.zip
+*.7z
+*.rar
+# Runtime droppings produced by the DLL sleeper fixture when executed under dynamic tests.
+dll-dropped-note.txt
+# Internal working docs and sample workspaces — never published.
+PLAN*.md
+docs-experiment.md
+triage-Unity.md
+docs/dsh-spike.md
+.blindtest-overlay.yml
+Unity.dll
+task one/
+task two/
+models/
+tools/ttd/
+*.dmp
+*.run/
+# Field scratch at the repo root (campaign notes, probes, one-off scripts).
+*.txt
+!upx-LICENSE.txt
+!tools/**/*.txt
+*.c
+!test/fixtures/*.c
+*.pyc
+emu_mini.py
+filter_strings.py
+ghidra_slice.c
+validator_*.c
+

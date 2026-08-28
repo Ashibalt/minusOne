@@ -1,0 +1,66 @@
+{
+  "name": "minusone",
+  "version": "1.0.0",
+  "description": "MCP server for reverse engineering: 71 semantic operations for static triage, unpacking, decompilation (Ghidra/IDA), dynamic instrumentation (frida, TTD), emulation (Unicorn), symbolic execution (angr), and evidence handling — for any MCP-compatible agent host.",
+  "keywords": [
+    "reverse-engineering",
+    "malware-analysis",
+    "binary-analysis",
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "decompiler",
+    "ghidra",
+    "ida-pro",
+    "radare2",
+    "frida",
+    "unicorn",
+    "angr",
+    "symbolic-execution",
+    "unpacking",
+    "packer-detection",
+    "ttd",
+    "time-travel-debugging",
+    "windows-internals",
+    "agent-tools",
+    "llm-tools"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ashibalt/minusOne.git"
+  },
+  "homepage": "https://github.com/Ashibalt/minusOne",
+  "type": "module",
+  "bin": {
+    "minusone": "dist/cli/main.js",
+    "minusone-re-mcp": "dist/mcp/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs test/combat.e2e.mjs",
+    "test:ghidra": "npm run build && node --test test/ghidra.smoke.mjs",
+    "doctor": "npm run build --silent && node dist/cli/main.js doctor",
+    "analyze": "npm run build --silent && node dist/cli/main.js analyze",
+    "mcp-check": "npm run build --silent && node dist/cli/main.js mcp-check",
+    "chat": "npm run build --silent && node dist/cli/main.js chat",
+    "eval:blind": "npm run build --silent && node test/eval/blind-eval.mjs",
+    "ghidra:build": "docker build -f docker/ghidra.Dockerfile -t minusone/ghidra:12.1.2 .",
+    "providers:build": "docker build -f docker/capa.Dockerfile -t minusone/capa:9.4.0 . && docker build -f docker/yarax.Dockerfile -t minusone/yara-x:1.19.0 . && docker build -f docker/floss.Dockerfile -t minusone/floss:3.1.1 . && docker build -f docker/die.Dockerfile -t minusone/die:3.21 . && docker build -f docker/volatility3.Dockerfile -t minusone/volatility3:2.28.0 .",
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "setup": "node scripts/setup.mjs",
+    "datasets:fetch": "node scripts/fetch-volatility-data.mjs image"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "frida": "^17.17.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "7.0.2"
+  }
+}
