@@ -19,7 +19,7 @@ docs/dsh-spike.md
 Unity.dll
 task one/
 task two/
-models/
+/models/
 tools/ttd/
 *.dmp
 *.run/

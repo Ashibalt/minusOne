@@ -105,7 +105,61 @@ sample already answers.
     operation (find hits, explain sites, decompile targets) shows your names —
     the compounding loop. `report_findings` keeps the case file across sessions.
 
+## Campaign mode (v2): the stateful layer for MULTI-FILE and LONG engagements
+
+WHEN to enter campaign mode — the threshold is the FILE COUNT and the
+number of tool calls, not how "serious" the task feels:
+
+- **One sample, a handful of questions → call the operations DIRECTLY.**
+  A plan for a single file is overhead: you serialize what the operations
+  already do in one call. `plan_run` for one binary is an anti-pattern.
+- **A corpus (2+ files — e.g. 40 binaries, some DLL some EXE) or a
+  long multi-stage engagement → campaign mode.** The whole point: you
+  describe the SAME operations once (triage on every file, strings on
+  every file, unpack where triage says packed...) and the executor runs
+  them across the batch — parallel where the files are independent, later
+  stages only where earlier results warrant (decompile the DLLs, skip the
+  EXEs — expressed with `dependsOn`), instead of you hand-calling each
+  operation per file and drowning your context in tool results.
+
+The state lives in `.minusone/campaign/` (plan.json, notes.md, dossier/,
+index/) and survives restarts and context compaction; you read it back
+instead of re-deriving.
+
+1. **Start of every session (and after ANY compaction):** `notes_read` and
+   `campaign_status` FIRST. The notes carry hypotheses with statuses and
+   WHY they died, the address table, dead ends, open questions; the status
+   answers "which tasks are done". Re-deriving any of that is wasted work.
+2. **Write the plan.** `plan_run` with a plan object: `goal` (the contract
+   the campaign answers to), `tasks` with `dependsOn` (parallel where
+   independent — across FILES the tasks are independent by nature), `fallback`
+   (alternate ops on error, or `true` for the built-in map), `onFailure`
+   (`skip` default / `stop` / `ask`). It runs as a job; dependency-ready
+   tasks run in parallel, the dynamic plane stays exclusive. Every settled
+   task lands in the dossier immediately — assembled (structured,
+   per-family) + raw (CAS pointer).
+3. **Write notes CONTINUOUSLY, not at the end.** Every verified finding →
+   `notes_update` log. A hypothesis dies → kill it WITH the reason. A path
+   fails → dead_end, so no one (including future-you) re-walks it. Context
+   compaction is unpredictable; unrecorded findings die with it.
+4. **Resume = edit + re-run.** A task fails? Fix the plan (drop the task,
+   or swap its operation) and call `plan_run` again — completed tasks skip
+   from the dossier. Progress is never lost unless you delete it. A failed
+   task's dependents come back as `blocked`, never fed with missing input.
+   `ask` halts with `needs-decision` and hands the choice to you.
+5. **Ask the field you already plowed.** With the models plane on,
+   `knowledge_index` embeds the dossier (incremental), then
+   `knowledge_query` answers "where is the X" with ranked chunks and source
+   pointers — a retrieval list to open, not a verdict.
+
 ## Anti-patterns — each of these cost real hours in the field
+
+- **A single-file plan.** `plan_run` for one binary serializes and wraps
+  what the operations already do in one direct call — plan overhead
+  without batch benefit. Campaign mode is for corpora (2+ files) and
+  long multi-stage engagements; enter it when the FILE COUNT or the
+  number of tool calls makes hand-driving the batch worse than writing
+  the plan once.
 
 - **Probe spirals.** Writing N one-off instrumentation rounds that each answer a
   narrow question, while the decisive question stays unasked. If three probes in

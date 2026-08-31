@@ -1,6 +1,6 @@
 # minusOne
 
-minusOne is an MCP server for reverse engineering. It exposes 71 semantic
+minusOne is an MCP server for reverse engineering. It exposes 77 semantic
 operations covering static triage, unpacking, decompilation, dynamic
 instrumentation, emulation, symbolic execution, time-travel debugging, and
 evidence handling — each call does the multi-step work an analyst would
@@ -14,6 +14,20 @@ is armed explicitly by the owner. Optional local ML models (CLAP + BinSeek)
 rank candidates for the agent — everything works without them.
 
 ## What it can do
+
+**Campaign orchestration (v2)**
+- Plan-driven engagements: write a plan (goal + tasks with dependencies,
+  fallbacks, failure modes) and `plan_run` orchestrates it — parallel
+  static tasks, exclusive dynamic plane, every settled task checkpointed
+  to the dossier immediately.
+- Resume without progress loss: edit `plan.json`, re-run `plan_run` —
+  completed tasks skip from the dossier.
+- Investigation notes as a first-class file: hypotheses with statuses and
+  reasons, address table, dead ends, open questions, append-only log —
+  read at session start, written continuously.
+- Campaign knowledge index (opt-in, models plane): the dossier embedded
+  per-function/per-section/per-field; plain-language queries return ranked
+  chunks with source pointers.
 
 **Static analysis**
 - One-call triage: format, sections/entropy, imports classified by API risk,
@@ -118,7 +132,7 @@ To verify the install:
 npm test
 ```
 
-290 tests — unit, integration, and live; live tests skip gracefully when a
+319 tests — unit, integration, and live; live tests skip gracefully when a
 backend (image, debugger, GPU, model) is not present.
 
 ## Connecting an agent host

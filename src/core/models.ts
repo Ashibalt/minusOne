@@ -94,14 +94,20 @@ async function bootSidecar(): Promise<SidecarProcess> {
   if (python === null) {
     throw new Error("no python interpreter found for the models sidecar; set MINUSONE_MODELS_PYTHON");
   }
-  const probe = await runBoundedCommand(python, ["-c", "import torch, transformers"], {
-    timeoutMs: MODELS_PROBE_TIMEOUT_MS,
-    maxOutputBytes: 16 * 1024,
-  }).catch((error: unknown) => null);
-  if (probe === null || probe.exitCode !== 0) {    throw new Error(
-      `the models sidecar needs python with torch+transformers+sentence-transformers (resolved python: ${python}); ` +
-        `install with: python -m pip install torch transformers sentence-transformers`,
-    );
+  // The dependency probe protects the DEFAULT sidecar only: an explicit
+  // MINUSONE_MODELS_SIDECAR override means the caller owns the environment
+  // (the same override contract as images and bins), probe included.
+  if (process.env.MINUSONE_MODELS_SIDECAR === undefined || process.env.MINUSONE_MODELS_SIDECAR === "") {
+    const probe = await runBoundedCommand(python, ["-c", "import torch, transformers"], {
+      timeoutMs: MODELS_PROBE_TIMEOUT_MS,
+      maxOutputBytes: 16 * 1024,
+    }).catch((error: unknown) => null);
+    if (probe === null || probe.exitCode !== 0) {
+      throw new Error(
+        `the models sidecar needs python with torch+transformers+sentence-transformers (resolved python: ${python}); ` +
+          `install with: python -m pip install torch transformers sentence-transformers`,
+      );
+    }
   }
   const child = spawn(python, [resolveSidecarPath()], {
     cwd: packageRoot,
@@ -357,6 +363,33 @@ export async function rankPseudocode(workspace: Workspace, options: RankPseudoco
     };
   } catch (error) {
     return { status: "error", model: "binseek", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export interface EmbedResult {
+  status: "ok" | "error" | "unavailable";
+  embeddings?: number[][];
+  error?: string;
+}
+
+/**
+ * Raw normalized BinSeek embeddings — the primitive behind the campaign
+ * knowledge index (persistent vector store). Same toggle contract as the
+ * ranking ops: disabled plane → status=unavailable, never a silent spend.
+ */
+export async function embedTexts(workspace: Workspace, texts: string[]): Promise<EmbedResult> {
+  if (!(await resolveModelsEnabled(workspace))) {
+    return { status: "unavailable", error: "models are disabled for this workspace (minusone models on, or MINUSONE_MODELS=1)" };
+  }
+  if (texts.length === 0) return { status: "error", error: "texts is required" };
+  try {
+    const response = await callSidecar("embed", { texts: texts.slice(0, 64) });
+    if (response.status !== "ok" || !Array.isArray(response.embeddings)) {
+      return { status: "error", error: String(response.error ?? "sidecar returned no embeddings") };
+    }
+    return { status: "ok", embeddings: response.embeddings as number[][] };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
   }
 }
 

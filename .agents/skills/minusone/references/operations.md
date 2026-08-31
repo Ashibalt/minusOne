@@ -154,3 +154,37 @@ output often carries an artifact id to page with `artifact_read`.
 | `report_findings` | Persist/list findings (title, severity, evidence artifact ids) across sessions | workspace, sync | tested |
 | `provider_report` | Which providers are available + dynamic-analysis policy | infrastructure, sync | combat |
 | `job_output` / `job_kill` | Poll / cancel background jobs | infrastructure | combat |
+
+## Campaign orchestration (v2)
+
+WHEN: corpora (2+ files) and long multi-stage engagements. One sample +
+a few questions → call the operations directly; a single-file plan is overhead.
+
+| Operation | Answers | Mode | Maturity |
+|---|---|---|---|
+| `plan_run` | Execute/resume the campaign plan: dependency-parallel tasks, fallback chains, dossier checkpoint; resume = edit plan.json + re-run | workspace, job | tested |
+| `campaign_status` | "Where am I?" — goal, per-task state, dossier listing, notes presence; the post-compaction orientation call | workspace, sync | tested |
+| `notes_read` | The investigation notes: hypotheses + statuses + WHY, address table, dead ends, questions, log | workspace, sync | tested |
+| `notes_update` | Write a finding NOW (log/hypothesis/address/dead_end/question/goal) — continuously, not at the end | workspace, sync | tested |
+| `knowledge_index` | Embed the dossier into the campaign vector index (incremental; needs models plane) | workspace, job | tested |
+| `knowledge_query` | Plain-language query over the indexed dossier — ranked chunks with source pointers | workspace, sync | tested |
+
+Semantics the plan author must know:
+
+- **Fallback triggers on status=error ONLY.** An empty result (not UPX,
+  zero hits) is a RESULT — no fallback fires. `refused`/`unavailable`
+  (unarmed dynamic plane, models off) fail the task WITHOUT fallback —
+  a policy state is not an operation failure.
+- **`fallback: true` map (tool-level):** `unpack_static`→`unpack_chain`,
+  `function_decompile`→`function_decompile_range`,
+  `ida_decompile`→`function_decompile`. An explicit list overrides it.
+- **`onFailure`:** `skip` (default — the chain continues, dependents of the
+  failed task come back `blocked`), `stop` (halt), `ask` (halt with
+  `needs-decision` — you edit the plan and re-run).
+- **Parallelism:** concurrency cap 2 (`MINUSONE_PLAN_CONCURRENCY` overrides);
+  dynamic-plane operations (dynamic.*, trace.*, debug.*, console.*,
+  sample_execute, unpack_chain, frida.script) serialize — one live instance,
+  one instrument.
+- **Dossier layout:** `campaign/dossier/<ts>_<task>_<op>.json` (fields:
+  task, operation, status, completedAt, attempts, assembled, rawArtifact)
+  + append-only `index.jsonl`. Resume skips tasks whose LATEST entry is ok.

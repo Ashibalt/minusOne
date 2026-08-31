@@ -5,6 +5,7 @@
  * render this table into their own tool registries.
  */
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { cacheKeyDigest, exportArtifact, findArtifactByCacheKey, listArtifacts, listFindings, readArtifact, readArtifactFull, storeArtifact, storeFinding } from "./artifacts.js";
 import { DEFAULT_IMAGES, resolveDockerImage } from "./backends.js";
 import { baselineAnalyze, disassemble } from "./analyzer.js";
@@ -5214,6 +5215,239 @@ export const operations: SemanticOperation[] = [
         artifactId: artifact.id,
         artifactBytes: artifact.bytes,
       };
+    },
+  },
+  {
+    id: "plan.run",
+    toolName: "plan_run",
+    description:
+      "Execute a campaign plan — the v2 orchestrator, for CORPUS work (2+ files: same operations across a batch, e.g. triage on 40 binaries, then decompile only where triage warrants) and long multi-stage engagements. For ONE sample with a few questions, call the operations directly — a single-file plan is overhead. Pass a plan object (validated + persisted to .minusone/campaign/plan.json, THE living document) or call with no plan to run/resume the existing plan.json. The executor runs dependency-ready tasks in parallel (across independent files the tasks parallelize naturally; the dynamic plane stays exclusive: one live instance, one instrument), tries each task's fallback operations on error (an EMPTY result is never a failure — only status=error is; refused/unavailable fail without fallback), and writes every settled task to the dossier IMMEDIATELY — a re-run skips completed tasks, so editing plan.json and re-calling plan_run is how you resume after fixing or dropping a task (progress is never lost). onFailure per task: skip (default, continue), stop (halt), ask (halt with needs-decision + the failed task — you decide). Background job: poll job_output (wait: true). The report carries completed/failed/blocked tasks, goalArtifacts present/missing, and the dossier path.",
+    parameters: {
+      type: "object",
+      properties: {
+        plan: {
+          type: "object",
+          description: "The plan: {version: 1, goal, goalArtifacts?, tasks: [{id, operation, args, dependsOn?, fallback?, onFailure?}]}. Validated and persisted to campaign/plan.json. Omit to resume the existing plan.",
+        },
+        concurrency: { type: "integer", minimum: 1, maximum: 8, description: "Parallel task cap (default 2; docker-backed ops are memory-hungry)" },
+      },
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["completed", "stopped", "needs-decision", "aborted"] },
+        goal: { type: "string" },
+        completed: { type: "array", items: { type: "string" } },
+        resumedFromDossier: { type: "array", items: { type: "string" } },
+        failed: { type: "array", items: { type: "object" } },
+        blocked: { type: "array", items: { type: "string" } },
+        goalArtifacts: { type: "object" },
+        decisionNeeded: { type: "object" },
+        dossierDir: { type: "string" },
+        notes: { type: "array", items: { type: "string" } },
+      },
+      required: ["status", "goal", "completed", "resumedFromDossier", "failed", "blocked", "goalArtifacts", "dossierDir", "notes"],
+    },
+    provider: "orchestrator",
+    timeoutMs: 300_000,
+    execute: async (rawArgs, services) => {
+      const { plan, concurrency } = rawArgs as { plan?: unknown; concurrency?: number };
+      const { readPlan, writePlan } = await import("./campaign.js");
+      const { runPlan } = await import("./plan.js");
+      const knownOperations = new Set(operations.map((operation) => operation.toolName));
+      const operationsByTool = new Map(operations.map((operation) => [operation.toolName, operation]));
+      const label = typeof plan === "object" && plan !== null && typeof (plan as Record<string, unknown>).goal === "string"
+        ? `plan: ${(plan as Record<string, unknown>).goal}`.slice(0, 80)
+        : "plan: resume";
+      return submitOperationJob(services, "plan-run", label, async (signal) => {
+        const campaignPlan = plan === undefined
+          ? await (async () => {
+              const existing = await readPlan(services.workspace, knownOperations);
+              if (existing === null) {
+                throw new Error("no campaign/plan.json and no plan argument — pass a plan object or write plan.json first");
+              }
+              return existing;
+            })()
+          : await writePlan(services.workspace, plan, knownOperations);
+        return runPlan(services.workspace, campaignPlan, operationsByTool, {
+          ...(concurrency === undefined ? {} : { concurrency }),
+          signal,
+        });
+      });
+    },
+  },
+  {
+    id: "campaign.status",
+    toolName: "campaign_status",
+    description:
+      "Where am I? — the post-compaction orientation call. Returns the campaign goal, per-task state (completed/failed/pending from the dossier), the dossier entry list, and whether investigation notes exist. Read this FIRST when resuming a campaign after a break or context compaction — before re-deriving anything.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: "object",
+      properties: {
+        hasCampaign: { type: "boolean" },
+        goal: { type: "string" },
+        updatedAt: { type: "number" },
+        tasks: { type: "array", items: { type: "object" } },
+        dossierEntries: { type: "array", items: { type: "object" } },
+        notesPresent: { type: "boolean" },
+      },
+      required: ["hasCampaign", "tasks", "dossierEntries", "notesPresent"],
+    },
+    provider: "orchestrator",
+    execute: async (_rawArgs, services) => {
+      const { listDossierIndex, notesPath, readPlan } = await import("./campaign.js");
+      const knownOperations = new Set(operations.map((operation) => operation.toolName));
+      const plan = await readPlan(services.workspace, knownOperations);
+      const index = await listDossierIndex(services.workspace);
+      const latest = new Map<string, "ok" | "error">();
+      for (const line of index) latest.set(line.task, line.status);
+      const tasks = (plan?.tasks ?? []).map((task) => ({
+        id: task.id,
+        operation: task.operation,
+        state: latest.get(task.id) === "ok" ? "completed" : latest.get(task.id) === "error" ? "failed" : "pending",
+        dependsOn: task.dependsOn,
+      }));
+      return {
+        hasCampaign: plan !== null,
+        ...(plan === null ? {} : { goal: plan.goal, updatedAt: plan.updatedAt }),
+        tasks,
+        dossierEntries: index,
+        notesPresent: existsSync(notesPath(services.workspace)),
+      };
+    },
+  },
+  {
+    id: "notes.read",
+    toolName: "notes_read",
+    description:
+      "Read the investigation notes (.minusone/campaign/notes.md) — the campaign's working memory: hypotheses with statuses and WHY they died, the address table, dead ends (never re-walk them), open questions, and the append-only log. Read this at the START of every campaign session and after any break or context compaction — before re-deriving anything. Returns the full markdown plus a section summary.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: "object",
+      properties: {
+        exists: { type: "boolean" },
+        markdown: { type: "string" },
+        summary: { type: "object" },
+      },
+      required: ["exists", "markdown"],
+    },
+    provider: "orchestrator",
+    execute: async (_rawArgs, services) => {
+      const { readNotes, summarizeNotes } = await import("./notes.js");
+      const notes = await readNotes(services.workspace);
+      return {
+        exists: notes.exists,
+        markdown: notes.markdown,
+        ...(notes.data === null ? {} : { summary: summarizeNotes(notes.data) }),
+      };
+    },
+  },
+  {
+    id: "notes.update",
+    toolName: "notes_update",
+    description:
+      "Update the investigation notes — write CONTINUOUSLY, not at the end: context compaction is unpredictable and unrecorded findings die with it. Actions: 'log' (append a log line — use for every verified finding), 'hypothesis' with status open|confirmed|killed (same text updates the status — killed hypotheses keep their WHY), 'address' (address + name for the address table), 'dead_end' (a path that failed + why — never re-walk it), 'question' (open question), 'resolve_question' (close one), 'goal' (set/replace the campaign goal). Creates the campaign tree lazily. Returns the updated section summary.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["goal", "log", "hypothesis", "address", "dead_end", "question", "resolve_question"] },
+        text: { type: "string", description: "The line to add (goal/log/hypothesis/dead_end/question/resolve_question)" },
+        status: { type: "string", enum: ["open", "confirmed", "killed"], description: "Hypothesis status (required for action=hypothesis)" },
+        address: { type: "string", description: "The address for action=address, e.g. 0x140001000" },
+        name: { type: "string", description: "The name/meaning for action=address, e.g. validate_key" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string" },
+        action: { type: "string" },
+        summary: { type: "object" },
+      },
+      required: ["status", "action", "summary"],
+    },
+    provider: "orchestrator",
+    execute: async (rawArgs, services) => {
+      const { action, text, status, address, name } = rawArgs as {
+        action: "goal" | "log" | "hypothesis" | "address" | "dead_end" | "question" | "resolve_question";
+        text?: string;
+        status?: "open" | "confirmed" | "killed";
+        address?: string;
+        name?: string;
+      };
+      const { updateNotes } = await import("./notes.js");
+      if (action === "address") {
+        if (address === undefined || name === undefined) throw new Error("action=address needs both address and name");
+        return updateNotes(services.workspace, { action, address, name });
+      }
+      if (text === undefined || text.trim() === "") throw new Error(`action=${action} needs a non-empty text`);
+      if (action === "hypothesis") {
+        if (status === undefined) throw new Error("action=hypothesis needs status open|confirmed|killed");
+        return updateNotes(services.workspace, { action, text, status });
+      }
+      return updateNotes(services.workspace, { action, text });
+    },
+  },
+  {
+    id: "knowledge.index",
+    toolName: "knowledge_index",
+    description:
+      "Build/refresh the campaign knowledge index from the dossier (OPT-IN — needs the models plane: minusone models on). Chunks are cut per-function/per-section/per-field (never raw bytes) and embedded with BinSeek-Embedding; INCREMENTAL — only new dossier entries get embedded, so re-running after more tasks complete is cheap. Background job: poll job_output (wait: true). Models disabled → status=unavailable, nothing else changes.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["ok", "error", "unavailable"] },
+        indexedChunks: { type: "integer" },
+        addedChunks: { type: "integer" },
+        skippedExisting: { type: "integer" },
+        entriesScanned: { type: "integer" },
+        byKind: { type: "object" },
+        error: { type: "string" },
+      },
+      required: ["status", "indexedChunks", "addedChunks", "skippedExisting", "entriesScanned", "byKind"],
+    },
+    provider: "orchestrator",
+    timeoutMs: 300_000,
+    execute: async (_rawArgs, services) => {
+      const { buildKnowledgeIndex } = await import("./knowledge.js");
+      return submitOperationJob(services, "knowledge-index", "knowledge index build", async () => buildKnowledgeIndex(services.workspace));
+    },
+  },
+  {
+    id: "knowledge.query",
+    toolName: "knowledge_query",
+    description:
+      "Ask the campaign's indexed knowledge in plain language — 'where is the key schedule', 'what did the signature check say', 'which function xors the config'. Returns RANKED CHUNKS with cosine scores and source pointers (task, operation, kind, ref, dossier file) — a retrieval list, not a verdict; open the source for the full text before acting. Requires the models plane (minusone models on) and a built index (knowledge_index). Models off → status=unavailable; no index → honest error telling you to build it.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Plain-language question, e.g. 'where does the config get decrypted'" },
+        topN: { type: "integer", minimum: 1, maximum: 32, description: "Candidates to return (default 8)" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["ok", "error", "unavailable"] },
+        ranked: { type: "array", items: { type: "object" } },
+        indexedChunks: { type: "integer" },
+        note: { type: "string" },
+        error: { type: "string" },
+      },
+      required: ["status"],
+    },
+    provider: "orchestrator",
+    execute: async (rawArgs, services) => {
+      const { query, topN } = rawArgs as { query: string; topN?: number };
+      const { queryKnowledge } = await import("./knowledge.js");
+      return queryKnowledge(services.workspace, query, topN ?? 8);
     },
   },
 ];

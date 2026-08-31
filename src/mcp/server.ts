@@ -47,6 +47,7 @@ const MINUSONE_INSTRUCTIONS = [
   "5. Most dynamic operations SPAWN their own instance. Interactive/TUI/stateful targets need the one-live-instance pattern: console_launch once, then attach by pid (console_send, frida attach, TTD attach).",
   "6. Write operations (binary_patch, pe_rebuild) act on copies; the original sample is never modified.",
   "7. Dynamic execution is owner-gated: `minusOne arm` once per machine; unarmed refusal is by design.",
+  "8. Campaigns (v2): for a CORPUS (2+ files) or a long multi-stage engagement — write a plan and let plan_run orchestrate it (same ops across the batch, fallbacks, parallelism, dossier checkpoint; resume = edit plan.json + re-run). For ONE sample with a few questions, call the operations directly — a single-file plan is overhead. Read notes_read/campaign_status FIRST at session start (context compaction kills unrecorded state); write notes_update CONTINUOUSLY as findings land.",
 ].join("\n");
 
 

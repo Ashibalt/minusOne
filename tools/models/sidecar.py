@@ -174,6 +174,17 @@ class Sidecar:
             "note": "cosine similarities against the query; attach xrefs and sizes and verify before acting",
         }
 
+    def embed(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Raw normalized embeddings for the campaign knowledge index —
+        rank_pseudocode ranks inline; this command powers persistent,
+        incrementally-built vector stores (knowledge_index/query)."""
+        texts = [str(t)[:MAX_ASM_CHARS] for t in request.get("texts", [])][:64]
+        if not texts:
+            return {"status": "error", "error": "texts is required"}
+        model = self._load_binseek()
+        embeddings = model.encode(texts, normalize_embeddings=True).tolist()
+        return {"status": "ok", "model": "binseek", "device": str(model.device), "embeddings": embeddings}
+
     def shutdown(self, _: dict[str, Any]) -> dict[str, Any]:
         return {"status": "ok", "bye": True}
 
@@ -191,6 +202,7 @@ HANDLERS = {
     "ping": Sidecar.ping,
     "rank_assembly": Sidecar.rank_assembly,
     "rank_pseudocode": Sidecar.rank_pseudocode,
+    "embed": Sidecar.embed,
     "shutdown": Sidecar.shutdown,
 }
 
