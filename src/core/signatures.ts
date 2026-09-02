@@ -45,8 +45,13 @@ interface CertificateTableLocation {
   size: number;
 }
 
-/** Locate the Authenticode certificate table (data directory index 4) in a PE. */
-async function locateCertificateTable(absolutePath: string): Promise<CertificateTableLocation | null> {
+/**
+ * Locate the Authenticode certificate table (data directory index 4,
+ * CERTIFICATE_TABLE) in a PE. Data directories start at optional-header
+ * offset 112 (PE32+) or 96 (PE32); every entry is 8 bytes, so index 4 sits
+ * at +4*8. Exported for the structural unit test.
+ */
+export async function locateCertificateTable(absolutePath: string): Promise<CertificateTableLocation | null> {
   const handle = await open(absolutePath, "r");
   try {
     const head = Buffer.alloc(0x400);
@@ -54,11 +59,11 @@ async function locateCertificateTable(absolutePath: string): Promise<Certificate
     const buffer = head.subarray(0, bytesRead);
     if (buffer.length < 0x40 || buffer.toString("ascii", 0, 2) !== "MZ") return null;
     const peOffset = buffer.readUInt32LE(0x3c);
-    if (peOffset + 24 + 112 + 8 > buffer.length) return null;
+    if (peOffset + 24 + 112 + 40 > buffer.length) return null;
     if (buffer.toString("ascii", peOffset, peOffset + 4) !== "PE\0\0") return null;
     const optionalHeaderOffset = peOffset + 24;
     const magic = buffer.readUInt16LE(optionalHeaderOffset);
-    const certDirOffset = magic === 0x20b ? optionalHeaderOffset + 112 + 4 * 4 : optionalHeaderOffset + 96 + 4 * 4;
+    const certDirOffset = magic === 0x20b ? optionalHeaderOffset + 112 + 4 * 8 : optionalHeaderOffset + 96 + 4 * 8;
     if (certDirOffset + 8 > buffer.length) return null;
     const rva = buffer.readUInt32LE(certDirOffset);
     const size = buffer.readUInt32LE(certDirOffset + 4);

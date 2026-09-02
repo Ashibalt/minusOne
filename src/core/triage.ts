@@ -88,7 +88,7 @@ const STANDARD_SECTION_NAMES = /^(\.text|\.data|\.rdata|\.rsrc|\.reloc|\.bss|\.i
  * crosses the hard threshold (7.5+ entropy in .text-like sections is not
  * compiler output).
  */
-function packedVerdict(
+export function packedVerdict(
   binary: BinaryInfo,
   tables: PeTables | null,
   diePacked: boolean | null,
@@ -117,10 +117,15 @@ function packedVerdict(
   }
 
   const allStandardSections = tables !== null && tables.sections.length > 0 && tables.sections.every((section) => STANDARD_SECTION_NAMES.test(section.name));
+  let suppressionNote: string | null = null;
   if (allStandardSections && entropyEvidence.length > 0 && hardHighEntropy.length === 0) {
     // Suppress weak evidence on a standard layout: MSVC/LTCG builds trip
     // DIE's entropy trigger at .text ~6.5 without being packed in any sense.
-    entropyEvidence = [`entropy hints (${entropyEvidence.join("; ")}) SUPPRESSED: every section name is standard compiler layout with no hard-threshold section — likely a false positive on an optimized build`];
+    // The note stays visible in packedWhy but does NOT make the verdict
+    // positive — suppression means "not packed" (the whole point of the
+    // Unity.dll lesson).
+    suppressionNote = `entropy hints (${entropyEvidence.join("; ")}) SUPPRESSED: every section name is standard compiler layout with no hard-threshold section — likely a false positive on an optimized build`;
+    entropyEvidence = [];
   }
 
   why.push(...strongEvidence, ...entropyEvidence);
@@ -136,7 +141,9 @@ function packedVerdict(
       why: [`packed hints suppressed: the file carries a VALID Authenticode signature (digest+chain verified) — a packed image would not. Suppressed hints: ${suppressed.join("; ")}`],
     };
   }
-  return { packed: why.length > 0, why };
+  const packed = why.length > 0;
+  if (suppressionNote !== null) why.push(suppressionNote);
+  return { packed, why };
 }
 
 export interface TriageOptions {
@@ -264,9 +271,18 @@ export function classifyImportRisk(imports: Array<{ dll: string; name: string }>
   return { level: highest, categories };
 }
 
-function sectionEntropy(dieEntropyRecords: Array<{ name?: unknown; entropy?: unknown }> | undefined, sectionName: string): number | null {
+export function sectionEntropy(dieEntropyRecords: Array<{ name?: unknown; entropy?: unknown }> | undefined, sectionName: string): number | null {
   for (const record of dieEntropyRecords ?? []) {
     if (typeof record.name === "string" && record.name === sectionName && typeof record.entropy === "number") {
+      return record.entropy;
+    }
+  }
+  // DIE names section records like `Section (1) [".text"]` — fall back to a
+  // containment match on the quoted section name (exact-only matching never
+  // hit, so triage section entropy was always null).
+  const needle = `["${sectionName}"]`;
+  for (const record of dieEntropyRecords ?? []) {
+    if (typeof record.name === "string" && record.name.includes(needle) && typeof record.entropy === "number") {
       return record.entropy;
     }
   }

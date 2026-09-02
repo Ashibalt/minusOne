@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { operations } from "../dist/core/operations.js";
-import { classifyImportRisk, mineIocs } from "../dist/core/triage.js";
+import { classifyImportRisk, mineIocs, packedVerdict, sectionEntropy } from "../dist/core/triage.js";
 import { Workspace } from "../dist/core/workspace.js";
 import { rmRoot } from "./helpers.mjs";
 
@@ -214,4 +214,61 @@ test("binary.triage live: real PE with imports, risk categories and IOCs", { tim
   assert.ok(result.sections.length >= 3, "real PE has multiple sections");
   assert.ok(result.verdict.packed === false, "plain gcc build is not packed");
   assert.ok(result.next.some((hint) => /capabilities_detect/.test(hint)));
+});
+
+test("packedVerdict: standard-layout sections suppress DIE entropy misfires (Unity.dll lesson)", () => {
+  const tables = {
+    sections: [
+      { name: ".text", virtualSize: 0x100000, rawSize: 0x100000, characteristics: 0x60000020 },
+      { name: ".rdata", virtualSize: 0x1000, rawSize: 0x1000, characteristics: 0x40000040 },
+    ],
+  };
+  const sectionEntropies = [
+    { name: ".text", virtualSize: 0x100000, rawSize: 0x100000, entropy: 6.5, executable: true, writable: false },
+  ];
+  const verdict = packedVerdict({ entropy: 6.4 }, tables, true, sectionEntropies, null);
+  assert.equal(verdict.packed, false, "suppressed weak evidence must not flag an optimized build as packed");
+  assert.ok(verdict.why.some((why) => /SUPPRESSED/.test(why)), "the suppression must stay visible in packedWhy");
+});
+
+test("packedVerdict: strong packer-layout evidence always wins", () => {
+  const tables = {
+    sections: [{ name: "UPX0", virtualSize: 0x10000, rawSize: 0, characteristics: 0xe0000020 }],
+  };
+  const verdict = packedVerdict({ entropy: 4.0 }, tables, false, [], null);
+  assert.equal(verdict.packed, true);
+  assert.ok(verdict.why.some((why) => /packer layout \(UPX0\)/.test(why)));
+  assert.ok(verdict.why.some((why) => /raw size 0/.test(why)));
+});
+
+test("packedVerdict: hard-threshold entropy on a standard layout is NOT suppressed", () => {
+  const tables = {
+    sections: [{ name: ".text", virtualSize: 0x10000, rawSize: 0x10000, characteristics: 0x60000020 }],
+  };
+  const sectionEntropies = [
+    { name: ".text", virtualSize: 0x10000, rawSize: 0x10000, entropy: 7.9, executable: true, writable: false },
+  ];
+  const verdict = packedVerdict({ entropy: 7.8 }, tables, true, sectionEntropies, null);
+  assert.equal(verdict.packed, true, "7.5+ entropy in an executable section is not compiler output");
+  assert.ok(!verdict.why.some((why) => /SUPPRESSED/.test(why)), "hard-threshold evidence is never suppressed");
+});
+
+test("packedVerdict: a valid Authenticode signature downgrades entropy-only hints", () => {
+  const verdict = packedVerdict({ entropy: 7.9 }, null, null, [], true);
+  assert.equal(verdict.packed, false);
+  assert.ok(verdict.why.some((why) => /VALID Authenticode/.test(why)));
+});
+
+test("sectionEntropy matches DIE's wrapped record names", () => {
+  // diec names section records like `Section (1) [".text"]`; exact-only
+  // matching never hit, so triage section entropy was always null.
+  const records = [
+    { name: "Header", entropy: 2.61 },
+    { name: 'Section (1) [".text"]', entropy: 6.14 },
+    { name: ".rdata", entropy: 4.2 },
+  ];
+  assert.equal(sectionEntropy(records, ".text"), 6.14);
+  assert.equal(sectionEntropy(records, ".rdata"), 4.2);
+  assert.equal(sectionEntropy(records, ".data"), null);
+  assert.equal(sectionEntropy(undefined, ".text"), null);
 });
